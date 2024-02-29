@@ -11,7 +11,7 @@ class ApplicationController < ActionController::Base
   end
 
   def redirect_back(fallback_path, **args)
-    super(fallback_location: fallback_path, **args)
+    super(fallback_location: fallback_path, allow_other_host: false, **args)
   end
 
   protected
@@ -29,7 +29,7 @@ class ApplicationController < ActionController::Base
   def upgrade_warning
     return unless current_user
     twitter_oauth_check
-    basecamp_auth_check
+    outdated_docker_registry_check
     outdated_google_auth_check
   end
 
@@ -58,10 +58,8 @@ class ApplicationController < ActionController::Base
     end
   end
 
-  def basecamp_auth_check
-    unless Devise.omniauth_providers.include?(:'37signals')
-      @basecamp_agent = current_user.agents.where(type: 'Agents::BasecampAgent').first
-    end
+  def outdated_docker_registry_check
+    @outdated_docker_registry = ENV['OUTDATED_DOCKER_REGISTRY'] == 'true'
   end
 
   def outdated_google_auth_check

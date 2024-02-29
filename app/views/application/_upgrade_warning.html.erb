@@ -1,4 +1,4 @@
-<% if @twitter_agent || @basecamp_agent %>
+<% if @twitter_agent %>
   <div class="alert alert-danger" role="alert">
     <p>
       <b>Warning!</b> You need to update your Huginn configuration, so your agents continue to work with the new OAuth services.
@@ -14,12 +14,6 @@ TWITTER_OAUTH_SECRET=<%= @twitter_oauth_secret %>
         </pre>
         To authenticate new accounts with your twitter OAuth application you need to log in the to <a href="https://apps.twitter.com/" target="_blank">twitter application management page</a> and set the callback URL of your application to "http<%= ENV['FORCE_SSL'] == 'true' ? 's' : '' %>://<%= ENV['DOMAIN'] %>/auth/twitter/callback".
 
-      </p>
-    <% end %>
-    <% if @basecamp_agent %>
-      <p>
-        Your <b>Basecamp</b> agents could not be migrated automatically. You need to manually register an application with 37signals and authenticate Huginn to use it.<br/>
-        Have a look at the <%= link_to 'Wiki', 'https://github.com/huginn/huginn/wiki/Configuring-OAuth-applications', target: '_blank' %> if you need help.
       </p>
     <% end %>
   </div>
@@ -41,6 +35,25 @@ TWITTER_OAUTH_SECRET=<%= @twitter_oauth_secret %>
           <li><%= link_to(agent.name, edit_agent_path(agent)) %></li>
         <% end -%>
         </ul>
+      </p>
+    </div>
+  </dir>
+<% end -%>
+<% if @outdated_docker_registry %>
+  <dir class="container">
+    <div class="alert alert-danger" role="alert">
+      <p>
+        <b>Warning!</b> This message is informing you that the source from which the Huginn Docker image is obtained needs to be updated.
+      </p>
+      <br/>
+      <p>
+        Docker Hub is discontinuing team accounts, and as a result, the Huginn Docker images will now be hosted on GitHub Container Registry (GHCR). Therefore, you need to update your configuration to the new registry.
+        <p>
+          <ul>
+            <li><code>huginn/huginn</code> is now <code>ghcr.io/huginn/huginn</code></li>
+            <li><code>huginn/huginn-single-process</code> is now <code>ghcr.io/huginn/huginn-single-process</code></li>
+          </ul>
+        </p>
       </p>
     </div>
   </dir>

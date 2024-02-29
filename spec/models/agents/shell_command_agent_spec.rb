@@ -12,7 +12,8 @@ describe Agents::ShellCommandAgent do
 
     @valid_params2 = {
       path: @valid_path,
-      command: [RbConfig.ruby, '-e', 'puts "hello, #{STDIN.eof? ? "world" : STDIN.read.strip}."; STDERR.puts "warning!"'],
+      command: [RbConfig.ruby, '-e',
+                'puts "hello, #{STDIN.eof? ? "world" : STDIN.read.strip}."; STDERR.puts "warning!"'],
       stdin: "{{name}}",
       expected_update_period_in_days: '1',
     }
@@ -33,7 +34,7 @@ describe Agents::ShellCommandAgent do
     }
     @event.save!
 
-    stub(Agents::ShellCommandAgent).should_run? { true }
+    allow(Agents::ShellCommandAgent).to receive(:should_run?) { true }
   end
 
   describe "validation" do
@@ -60,13 +61,13 @@ describe Agents::ShellCommandAgent do
 
   describe "#working?" do
     it "generating events as scheduled" do
-      stub(@checker).run_command(@valid_path, 'pwd', nil, {}) { ["fake pwd output", "", 0] }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'pwd', nil) { ["fake pwd output", "", 0] }
 
       expect(@checker).not_to be_working
       @checker.check
       expect(@checker.reload).to be_working
       three_days_from_now = 3.days.from_now
-      stub(Time).now { three_days_from_now }
+      allow(Time).to receive(:now) { three_days_from_now }
       expect(@checker).not_to be_working
     end
   end
@@ -74,13 +75,18 @@ describe Agents::ShellCommandAgent do
   describe "#check" do
     before do
       orig_run_command = @checker.method(:run_command)
-      stub(@checker).run_command(@valid_path, 'pwd', nil, {}) { ["fake pwd output", "", 0] }
-      stub(@checker).run_command(@valid_path, 'empty_output', nil, {}) { ["", "", 0] }
-      stub(@checker).run_command(@valid_path, 'failure', nil, {}) { ["failed", "error message", 1] }
-      stub(@checker).run_command(@valid_path, 'echo $BUNDLE_GEMFILE', nil, unbundle: true) { orig_run_command.(@valid_path, 'echo $BUNDLE_GEMFILE', nil, unbundle: true) }
-      [[], [{}], [{ unbundle: false }]].each do |rest|
-        stub(@checker).run_command(@valid_path, 'echo $BUNDLE_GEMFILE', nil, *rest) { [ENV['BUNDLE_GEMFILE'].to_s, "", 0] }
-      end
+      allow(@checker).to receive(:run_command).with(@valid_path, 'pwd', nil) { ["fake pwd output", "", 0] }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'empty_output', nil) { ["", "", 0] }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'failure', nil) { ["failed", "error message", 1] }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'echo $BUNDLE_GEMFILE', nil, unbundle: true) {
+        orig_run_command.call(@valid_path, 'echo $BUNDLE_GEMFILE', nil, unbundle: true)
+      }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'echo $BUNDLE_GEMFILE', nil) {
+        [ENV['BUNDLE_GEMFILE'].to_s, "", 0]
+      }
+      allow(@checker).to receive(:run_command).with(@valid_path, 'echo $BUNDLE_GEMFILE', nil, unbundle: false) {
+        [ENV['BUNDLE_GEMFILE'].to_s, "", 0]
+      }
     end
 
     it "should create an event when checking" do
@@ -93,7 +99,10 @@ describe Agents::ShellCommandAgent do
     it "should create an event when checking (unstubbed)" do
       expect { @checker2.check }.to change { Event.count }.by(1)
       expect(Event.last.payload[:path]).to eq(@valid_path)
-      expect(Event.last.payload[:command]).to eq([RbConfig.ruby, '-e', 'puts "hello, #{STDIN.eof? ? "world" : STDIN.read.strip}."; STDERR.puts "warning!"'])
+      expect(Event.last.payload[:command]).to eq [
+        RbConfig.ruby, '-e',
+        'puts "hello, #{STDIN.eof? ? "world" : STDIN.read.strip}."; STDERR.puts "warning!"'
+      ]
       expect(Event.last.payload[:output]).to eq('hello, world.')
       expect(Event.last.payload[:errors]).to eq('warning!')
     end
@@ -127,16 +136,13 @@ describe Agents::ShellCommandAgent do
     end
 
     it "does not run when should_run? is false" do
-      stub(Agents::ShellCommandAgent).should_run? { false }
+      allow(Agents::ShellCommandAgent).to receive(:should_run?) { false }
       expect { @checker.check }.not_to change { Event.count }
     end
 
     describe "with unbundle" do
       before do
         @checker.options[:command] = 'echo $BUNDLE_GEMFILE'
-        if ENV['TRAVIS'] == 'true'
-          stub.proxy(Bundler).original_env { |env| env.except('BUNDLE_GEMFILE') }
-        end
       end
 
       context "unspecified" do
@@ -172,7 +178,9 @@ describe Agents::ShellCommandAgent do
 
   describe "#receive" do
     before do
-      stub(@checker).run_command(@valid_path, @event.payload[:cmd], nil, {}) { ["fake ls output", "", 0] }
+      allow(@checker).to receive(:run_command).with(@valid_path, @event.payload[:cmd], nil) {
+        ["fake ls output", "", 0]
+      }
     end
 
     it "creates events" do
@@ -191,7 +199,7 @@ describe Agents::ShellCommandAgent do
     end
 
     it "does not run when should_run? is false" do
-      stub(Agents::ShellCommandAgent).should_run? { false }
+      allow(Agents::ShellCommandAgent).to receive(:should_run?) { false }
 
       expect {
         @checker.receive([@event])

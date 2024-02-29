@@ -5,6 +5,7 @@ require 'mail'
 
 module Agents
   class ImapFolderAgent < Agent
+    include GoogleOauth2Concern
     include EventHeadersConcern
 
     cannot_receive_events!
@@ -13,14 +14,16 @@ module Agents
 
     default_schedule "every_30m"
 
-    description <<-MD
+    description <<~MD
       The Imap Folder Agent checks an IMAP server in specified folders and creates Events based on new mails found since the last run. In the first visit to a folder, this agent only checks for the initial status and does not create events.
 
-      Specify an IMAP server to connect with `host`, and set `ssl` to true if the server supports IMAP over SSL.  Specify `port` if you need to connect to a port other than standard (143 or 993 depending on the `ssl` value).
+      Specify an IMAP server to connect with `host`, and set `ssl` to true if the server supports IMAP over SSL.  Specify `port` if you need to connect to a port other than standard (143 or 993 depending on the `ssl` value), and specify login credentials in `username` and `password`.
 
-      Specify login credentials in `username` and `password`.
+      Alternatively, if you want to use Gmail, go to the Services page and authenticate with Google beforehand, and then select the service.  In this case, `host`, `ssl`, `port`, `username` and `password` are unnecessary and will be ignored.
 
       List the names of folders to check in `folders`.
+
+      Specify an array of MIME types in 'mime_types' to tell which non-attachment part of a mail among its `text/*` parts should be used as mail body.  The default value is `['text/plain', 'text/enriched', 'text/html']`.
 
       To narrow mails by conditions, build a `conditions` hash with the following keys:
 
@@ -30,7 +33,7 @@ module Agents
 
           Use the `(?i)` directive for case-insensitive search.  For example, a pattern `(?i)alert` will match "alert", "Alert"or "ALERT".  You can also make only a part of a pattern to work case-insensitively: `Re: (?i:alert)` will match either "Re: Alert" or "Re: alert", but not "RE: alert".
 
-          When a mail has multiple non-attachment text parts, they are prioritized according to the `mime_types` option (which see below) and the first part that matches a "body" pattern, if specified, will be chosen as the "body" value in a created event.
+          When a mail has multiple non-attachment text parts, they are prioritized according to the `mime_types` option (as mentioned above) and the first part that matches a "body" pattern, if specified, will be chosen as the "body" value in a created event.
 
           Named captures will appear in the "matches" hash in a created event.
 
@@ -41,16 +44,13 @@ module Agents
 
           Multiple pattern strings can be specified in an array, in which case a mail is selected if any of the patterns matches. (i.e. patterns are OR'd)
 
-      - `mime_types`
-          Specify an array of MIME types to tell which non-attachment part of a mail among its text/* parts should be used as mail body.  The default value is `['text/plain', 'text/enriched', 'text/html']`.
-
       - `is_unread`
           Setting this to true or false means only mails that is marked as unread or read respectively, are selected.
 
           If this key is unspecified or set to null, it is ignored.
 
       - `has_attachment`
-      
+
           Setting this to true or false means only mails that does or does not have an attachment are selected.
 
           If this key is unspecified or set to null, it is ignored.
@@ -73,7 +73,7 @@ module Agents
       Also, in order to avoid duplicated notification it keeps a list of Message-Id's of 100 most recent mails, so if multiple mails of the same Message-Id are found, you will only see one event out of them.
     MD
 
-    event_description <<-MD
+    event_description <<~MD
       Events look like this:
 
           {
@@ -120,20 +120,20 @@ module Agents
     end
 
     def validate_options
-      %w[host username password].each { |key|
-        String === options[key] or
-          errors.add(:base, '%s is required and must be a string' % key)
-      }
+      if !service
+        %w[host username password].each { |key|
+          String === options[key] or
+            errors.add(:base, '%s is required and must be a string' % key)
+        }
+      end
 
       if options['port'].present?
         errors.add(:base, "port must be a positive integer") unless is_positive_integer?(options['port'])
       end
 
       %w[ssl mark_as_read delete include_raw_mail].each { |key|
-        if options[key].present?
-          if boolify(options[key]).nil?
-            errors.add(:base, '%s must be a boolean value' % key)
-          end
+        if options[key].present? && boolify(options[key]).nil?
+          errors.add(:base, '%s must be a boolean value' % key)
         end
       }
 
@@ -173,7 +173,7 @@ module Agents
             when String
               begin
                 Regexp.new(value)
-              rescue
+              rescue StandardError
                 errors.add(:base, 'conditions.%s contains an invalid regexp' % key)
               end
             else
@@ -185,7 +185,7 @@ module Agents
               when String
                 begin
                   glob_match?(pattern, '')
-                rescue
+                rescue StandardError
                   errors.add(:base, 'conditions.%s contains an invalid glob pattern' % key)
                 end
               else
@@ -205,8 +205,16 @@ module Agents
       end
 
       if options['expected_update_period_in_days'].present?
-        errors.add(:base, "Invalid expected_update_period_in_days format") unless is_positive_integer?(options['expected_update_period_in_days'])
+        errors.add(
+          :base,
+          "Invalid expected_update_period_in_days format"
+        ) unless is_positive_integer?(options['expected_update_period_in_days'])
       end
+    end
+
+    def validate_service
+      # Override Oauthable#validate_service; service is optional in
+      # this agent.
     end
 
     def check
@@ -233,14 +241,14 @@ module Agents
             value.present? or next true
             re = Regexp.new(value)
             matched_part = body_parts.find { |part|
-               if m = re.match(part.scrubbed(:decoded))
-                 m.names.each { |name|
-                   matches[name] = m[name]
-                 }
-                 true
-               else
-                 false
-               end
+              if m = re.match(part.scrubbed(:decoded))
+                m.names.each { |name|
+                  matches[name] = m[name]
+                }
+                true
+              else
+                false
+              end
             }
           when 'from', 'to', 'cc'
             value.present? or next true
@@ -259,7 +267,7 @@ module Agents
           when 'has_attachment'
             boolify(value) == mail.has_attachment?
           when 'is_unread'
-            true  # already filtered out by each_unread_mail
+            true # already filtered out by each_unread_mail
           else
             log 'Unknown condition key ignored: %s' % key
             true
@@ -288,7 +296,12 @@ module Agents
             'from' => mail.from_addrs.first,
             'to' => mail.to_addrs,
             'cc' => mail.cc_addrs,
-            'date' => (mail.date.iso8601 rescue nil),
+            'date' =>
+              begin
+                mail.date.iso8601
+              rescue StandardError
+                nil
+              end,
             'mime_type' => mime_type,
             'body' => body,
             'matches' => matches,
@@ -302,12 +315,12 @@ module Agents
           if interpolated['event_headers'].present?
             headers = mail.header.each_with_object({}) { |field, hash|
               name = field.name
-              hash[name] = (v = hash[name]) ? "#{v}\n#{field.value.to_s}" : field.value.to_s
+              hash[name] = (v = hash[name]) ? "#{v}\n#{field.value}" : field.value.to_s
             }
             payload.update(event_headers_payload(headers))
           end
 
-          create_event payload: payload
+          create_event(payload:)
 
           notified << mail.message_id if mail.message_id
         end
@@ -325,17 +338,31 @@ module Agents
     end
 
     def each_unread_mail
-      host, port, ssl, username = interpolated.values_at(:host, :port, :ssl, :username)
+      if service
+        host = 'imap.gmail.com'
+        port = 993
+        ssl = true
+        username = google_oauth2_email
+        password = google_oauth2_access_token
+      else
+        host, port, ssl, username = interpolated.values_at(:host, :port, :ssl, :username)
+        password = interpolated[:password]
+      end
       ssl = boolify(ssl)
       port = (Integer(port) if port.present?)
 
       log "Connecting to #{host}#{':%d' % port if port}#{' via SSL' if ssl}"
-      Client.open(host, port: port, ssl: ssl) { |imap|
+      Client.open(host, port:, ssl:) { |imap|
         log "Logging in as #{username}"
-        imap.login(username, interpolated[:password])
+        if service
+          imap.authenticate('XOAUTH2', username, password)
+        else
+          imap.login(username, password)
+        end
 
         # 'lastseen' keeps a hash of { uidvalidity => lastseenuid, ... }
-        lastseen, seen = self.lastseen, self.make_seen
+        lastseen = self.lastseen
+        seen = self.make_seen
 
         # 'notified' keeps an array of message-ids of {IDCACHE_SIZE}
         # most recent notified mails.
@@ -364,8 +391,8 @@ module Agents
           seen[uidvalidity] = lastseenuid
           is_unread = boolify(interpolated['conditions']['is_unread'])
 
-          uids = imap.uid_fetch((lastseenuid + 1)..-1, 'FLAGS').
-                 each_with_object([]) { |data, ret|
+          uids = imap.uid_fetch((lastseenuid + 1)..-1, 'FLAGS')
+            .each_with_object([]) { |data, ret|
             uid, flags = data.attr.values_at('UID', 'FLAGS')
             seen[uidvalidity] = uid
             next if uid <= lastseenuid
@@ -410,8 +437,8 @@ module Agents
       Seen.new(memory['lastseen'])
     end
 
-    def lastseen= value
-      memory.delete('seen')  # obsolete key
+    def lastseen=(value)
+      memory.delete('seen') # obsolete key
       memory['lastseen'] = value
     end
 
@@ -423,7 +450,7 @@ module Agents
       Notified.new(memory['notified'])
     end
 
-    def notified= value
+    def notified=(value)
       memory['notified'] = value
     end
 
@@ -448,6 +475,13 @@ module Agents
           yield imap
         ensure
           imap.disconnect unless imap.nil?
+        end
+
+        private
+
+        def authenticators
+          # The authenticators table is stored in the Net::IMAP instance.
+          Net::IMAP.send(:authenticators)
         end
       end
 
@@ -513,7 +547,7 @@ module Agents
       module Scrubbed
         def scrubbed(method)
           (@scrubbed ||= {})[method.to_sym] ||=
-            __send__(method).try(:scrub) { |bytes| "<#{bytes.unpack('H*')[0]}>" }
+            __send__(method).try(:scrub) { |bytes| "<#{bytes.unpack1('H*')}>" }
         end
       end
 
@@ -561,7 +595,7 @@ module Agents
           [mail]
         end.select { |part|
           if part.multipart? || part.attachment? || !part.text? ||
-             !mime_types.include?(part.mime_type)
+              !mime_types.include?(part.mime_type)
             false
           else
             part.extend(Scrubbed)

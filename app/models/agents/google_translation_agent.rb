@@ -4,7 +4,7 @@ module Agents
 
     gem_dependency_check { defined?(Google) && defined?(Google::Cloud::Translate) }
 
-    description <<-MD
+    description <<~MD
       The Translation Agent will attempt to translate text between natural languages.
 
       #{'## Include `google-api-client` in your Gemfile to use this Agent!' if dependencies_missing?}
@@ -76,12 +76,15 @@ module Agents
     end
 
     def translate_service
-      @translate_service ||= google_client.discovered_api('translate','v2')
+      @translate_service ||= google_client.discovered_api('translate', 'v2')
     end
 
     def cloud_translate_service
       # https://github.com/GoogleCloudPlatform/google-cloud-ruby/blob/master/google-cloud-translate/lib/google-cloud-translate.rb#L130
-      @google_client ||= Google::Cloud::Translate.new(key: interpolated['google_api_key'])
+      @google_client ||= Google::Cloud::Translate.new(
+        version: :v2,
+        key: interpolated['google_api_key']
+      )
     end
 
     def translate(value)
